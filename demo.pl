@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Time::HiRes;
 use Data::Dumper;
-use List::Util ('all');
+use List::Util ('all', 'shuffle');
 
 #--------------------------------
 package World;
@@ -112,6 +112,7 @@ sub msg {
 #----------------------------------
 package Actor;
 use Term::ANSIColor;
+use List::Util ('all', 'shuffle');
 
 our $ID = 0;
 sub new {
@@ -119,7 +120,7 @@ sub new {
     my %self  = @_;
     
     $self{id}     = $Actor::ID++;
-    $self{caps}   = 0;
+    $self{caps}   = 100;
     $self{energy} = 0;
     $self{ore}    = 0;
     $self{starvation} = 0;
@@ -212,18 +213,56 @@ sub buy {
 }
 
 
+sub build {
+    my ($self) = @_;
+
+    my @products = shuffle ('ore', 'energy');
+
+    for my $product (@products) {
+        $self->build_generator($product);
+    }
+}
+
+
+sub build_generator {
+    my ($self, $product) = @_;
+
+    my %costs = ("ore" => 20,
+                 "energy" => 100);
+
+    # Afford this generator?
+    if ($self->{caps} < $costs{$product}) {
+        return; # nope
+    }
+
+    # Pay for it
+    $self->{caps} -= $costs{$product};
+
+    # Add generator
+    $self->{generators}->{$product} += 1;
+}
+
 sub produce {
     my ($self) = @_;
     return if $self->is_dead;
-    
+
+    my %capacities = ("ore"    => 5,
+                      "energy" => 30);
+
     my @report;
     for my $product ('ore', 'energy') {
-        my $harvest = int(rand() * 10);
-        next unless $harvest;
-        
-        $self->{$product} += $harvest;
-        $self->{starvation} -= 1 if $self->{starvation} > 0;
-        
+        # For each kind of generator, see what is produced
+        my $harvest = 0;
+        for (my $i = 0; $i < $self->{generators}->{$product}; $i++) {
+            $harvest = int(rand() * $capacities{$product});
+            next unless $harvest;
+
+            $self->{$product} += $harvest;
+
+            # Thing again about the starvation rules
+            $self->{starvation} -= 1 if $self->{starvation} > 0;
+        }
+
         push @report, "produced $harvest units of $product";
     }
 
@@ -266,6 +305,7 @@ sub total_assets_in_caps {
     return $caps;
 }
 
+
 # Loss of product due to usage, spoilage or theft
 sub shrinkage {
     my ($self) = @_;
@@ -291,13 +331,18 @@ sub msg {
 
     my $state = "";
     if ($self->is_dead) {
-        $state = color("bold white") . " {DEAD} ". color("reset");
+        $state = color("bold red") . "{DEAD}". color("reset");
     } elsif ($self->{starvation}) {
-        $state = color("bold white") . " {STARVING} ". color("reset");
+        $state = color("bold white") . "{STARVING}". color("reset");
     }
 
-    printf("Actor %d%s] %s\n", $self->{id},
+    # Add padding
+    my $padding = 25 - length($state);
+    $state = (' ' x $padding) . $state;
+
+    printf("%s Actor %d] %s\n",
            $state,
+           $self->{id},
            join("; ", @msg)
           );
 }
@@ -318,7 +363,8 @@ sub Main {
 
     my $week = 0;
     while (1) {
-        printf "\n===Week %3d; %d ore; %d energy===\n\n", $week++, $world->{ore}, $world->{energy};
+        printf "\n===============Week %3d; %d ore; %d energy===================\n\n",
+          $week++, $world->{ore}, $world->{energy};
 
         for my $actor (sort_wealthy(@actors)) {
             $actor->status;
@@ -326,7 +372,11 @@ sub Main {
         print "\n";
 
         last if all { $_->is_dead } @actors;
-        
+
+        for my $actor (@actors) {
+            $actor->build;
+        }
+
         for my $actor (@actors) {
             $actor->produce;
             $actor->sell;
