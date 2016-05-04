@@ -14,9 +14,9 @@ sub new {
     my %self  = @_;
 
     # $self{caps}   = 100;
-    $self{energy}   = 100;
-    $self{ore}      = 100;
-    $self{week}     = 1;
+    $self{energy} = 100;
+    $self{ore}    = 100;
+    $self{week}   = 1;
     bless \%self, $class;
     \%self;
 } # end sub new
@@ -44,24 +44,17 @@ sub unit_price {
     # $fudge gets us there
     my $fudge = 35;
     if ($supply > ($over_abundance - $fudge)) {
-        push @report,
-            color("bold white")
-          . "World glut of $product: $supply units available"
-          . color("reset");
+        #
+        #push @report,
+        #    color("bold white")
+        #  . "World glut of $product: $supply units available"
+        #  . color("reset");
 
         $supply = $over_abundance - $fudge;
     }
 
     if ($supply < 0) {
         $supply = 0;
-    }
-
-    if ($supply < 1.0) {
-        push @report,
-          color("bold white")
-          . sprintf("World shortage of $product: %0.2f units available",
-            $supply)
-          . color("reset");
     }
 
     # Range of X values 0 - 2
@@ -115,19 +108,95 @@ sub msg {
 
 sub status {
     my ($self) = @_;
-    my $banner = '='x7;
+    my $banner = '=' x 7;
 
     printf(
-      "%sWeek %d: Ore[%4d]: %2.2f caps/unit; Energy[%4d]: %2.2f caps/unit%s\n\n",
-      $banner,
-      $self->{week},
-      $self->{ore},
-      $self->unit_price("ore"),
-      $self->{energy},
-      $self->unit_price("energy"),
-      $banner,
-      );
+        "%sWeek %d: Ore[%4d]: %2.2f caps/unit; Energy[%4d]: %2.2f caps/unit%s\n\n",
+        $banner, $self->{week}, $self->{ore}, $self->unit_price("ore"),
+        $self->{energy}, $self->unit_price("energy"), $banner,
+    );
 } # end sub status
+
+#----------------------------------
+package Commodity;
+
+sub new {
+    my ($class) = shift;
+    my %args = (
+        product           => undef, # ore|energy
+        generator_name    => undef,
+        harvest           => 0,
+        buy_cost          => 0,
+        maint_cost_amount => 0,
+        maint_cost_type   => 0,     # ore|energy|caps
+        tax               => 0,
+        @_
+    );
+
+    my %self = (_attr => \%args);
+    my $self = bless(\%self, (ref $class || $class));
+    $self->_init_accessors();
+
+    return $self;
+} # end sub new
+
+sub _init_accessors {
+    my ($self) = @_;
+    my $class  = ref $self;
+    my $attrs  = $self->{_attr};
+
+    for my $key (keys %$attrs) {
+        my $existing;
+        eval "\$existing = *${class}::${key}{CODE}";
+        next if $existing;
+
+        # monkey patch the accessors into the class
+        my $method =
+          "sub $class::$key { my (\$s, \$v) = \@_; (defined \$v) && (\$s->{_attr}->{$key} = \$v); \$s->{_attr}->{$key} }";
+        eval $method;
+
+        die "Creating $class::${key} - $@\n---\n$method\n---\n" if $@;
+    }
+} # end sub _init_accessors
+
+
+#----------------------------------
+package Ore;
+our @ISA = ('Commodity');
+sub new {
+    my ($class) = shift;
+    my %args = (
+        product           => "ore",
+        generator_name    => "ore mine",
+        harvest           => 15,
+        buy_cost          => 20,
+        maint_cost_amount => 5,
+        maint_cost_type   => "energy",
+        tax               => 8,
+        @_
+    );
+    return $class->SUPER::new(%args);
+} # end sub new
+
+
+#----------------------------------
+package Energy;
+our @ISA = ('Commodity');
+sub new {
+    my ($class) = shift;
+    my %args = (
+        product           => "energy",
+        generator_name    => "wind farm",
+        harvest           => 30,
+        buy_cost          => 60,
+        maint_cost_amount => 10,
+        maint_cost_type   => "ore",
+        tax               => 15,
+        @_
+    );
+    return $class->SUPER::new(%args);
+} # end sub new
+
 
 #----------------------------------
 package Actor;
@@ -144,20 +213,19 @@ sub new {
     $self{energy}     = 0;
     $self{ore}        = 0;
     $self{starvation} = 0;
-    $self{generators} = { ore => 0, energy => 0 };
-    $self{consumption} = { ore => { product => "energy", cost => 10 },
-                           energy => { product => "ore", cost => 5 },
-                         };
+    $self{generators} = { ore => [], energy => [] };
 
     bless \%self, $class;
 
     return \%self;
 } # end sub new
 
+
 sub is_dead {
     my ($self) = @_;
-    return ($self->{starvation} > 4);
+    return ($self->{starvation} > 8);
 } # end sub is_dead
+
 
 sub sell {
     my ($self, $product) = @_;
@@ -166,10 +234,9 @@ sub sell {
 
     my @report;
     for my $product ('ore', 'energy') {
-        # Do I need this?
-        if ($self->{$product} < 10) {
-            next;
-        }
+
+        # Do not sell if you are not starving
+        next if $self->{starvation} == 0;
 
         my $want = int(rand($self->{$product}));
 
@@ -203,21 +270,25 @@ sub buy {
 
     my @report;
     for my $product ('ore', 'energy') {
-        next if $self->{world}->has_shortage($product); # can't buy
 
         # Am I starving?  Do I need this?
-        if ($self->{starvation} < 4) {
+        if ($self->{starvation} < 3) {
             next;
         }
 
-        my $want = int(rand($self->{world}->{$product}));
+        # Am I broke?
+        next unless $self->{caps};
+
+        my $supply     = $self->{world}->{$product};
+        my $unit_price = $self->{world}->unit_price($product);
+
+        # I WANT ALL THE THINGS!
+        my $want = int($self->{caps} / $unit_price);
         next unless $want;
 
-        die("ERROR: $self->{world}->{$product}")
-          if $self->{world}->{$product} < 1;
-
-        # Compute the unit price for this good
-        my $unit_price = $self->{world}->unit_price($product);
+        if ($want > $supply) {
+            $want = $supply;
+        }
 
         # Can the Actor afford to pay for it?
         my $invoice = ($unit_price * $want);
@@ -245,11 +316,7 @@ sub buy {
 
 sub build {
     my ($self) = @_;
-
-    my %names = (
-        "ore"    => "ore mine",
-        "energy" => "wind farm",
-    );
+    return if $self->is_dead;
 
     my @report;
     my @products = shuffle('ore', 'energy');
@@ -257,14 +324,18 @@ sub build {
     # TODO: make smarter decisions about what and when to buy
     for my $product (@products) {
 
-        # If starving, do not take on more liabilities
-        if ($self->{starvation} > 4) {
-            next;
-        }
-        if ($self->build_generator($product)) {
+        # If starving, do not take on more liabilities, maybe?
+        #        if ($self->{starvation} > 4) {
+        #            next;
+        #        }
+
+        if (my $commodity = $self->build_generator($product)) {
             push @report,
-              sprintf("built another %s (%d total)",
-                $names{$product}, $self->{generators}->{$product});
+              sprintf(
+                "built another %s (%d total)",
+                $commodity->generator_name,
+                scalar @{ $self->{generators}->{$product} }
+              );
         }
     }
 
@@ -274,20 +345,29 @@ sub build {
 
 sub build_generator {
     my ($self, $product) = @_;
+    return if $self->is_dead;
 
-    my %costs = (
-        "ore"    => 20,
-        "energy" => 100
-    );
+    my $commodity;
+
+    # Sure looks like a Factory method...
+    if ($product eq 'ore') {
+        $commodity = Ore->new;
+    } elsif ($product eq 'energy') {
+        $commodity = Energy->new;
+    } else {
+        die "Unknown product '$product'";
+    }
 
     # Afford this generator?
-    return unless $self->{caps} >= $costs{$product};
+    return unless $self->{caps} >= $commodity->buy_cost;
 
     # Pay for it
-    $self->{caps} -= $costs{$product};
+    $self->{caps} -= $commodity->buy_cost;
 
     # Add generator
-    $self->{generators}->{$product} += 1;
+    push @{ $self->{generators}->{$product} }, $commodity;
+
+    return $commodity;
 } # end sub build_generator
 
 
@@ -295,26 +375,19 @@ sub produce {
     my ($self) = @_;
     return if $self->is_dead;
 
-    my %capacities = (
-        "ore"    => 50,
-        "energy" => 50
-    );
-
     my @report;
     for my $product ('ore', 'energy') {
         # For each kind of generator, see what is produced
         my $harvest = 0;
-        for (my $i = 0; $i < $self->{generators}->{$product}; $i++) {
-            $harvest = int(rand() * $capacities{$product});
+
+        for my $commodity (@{ $self->{generators}->{$product} }) {
+            $harvest = int(rand() * $commodity->harvest);
             next unless $harvest;
 
             $self->{$product} += $harvest;
-
-            # Thing again about the starvation rules
-            $self->{starvation} -= 1 if $self->{starvation} > 0;
         }
 
-        push @report, "produced $harvest units of $product";
+        push @report, "produced $harvest units of $product" if $harvest;
     }
 
     $self->msg(@report);
@@ -324,20 +397,74 @@ sub produce {
 sub consume {
     my ($self) = @_;
 
-    # Consumption to be based on # of generators
-    for my $product ('ore', 'energy') {
-        for (my $i = 0; $i < $self->{generators}->{$product}; $i++) {
-            my $cost_struct = $self->{consumption}->{$product};
+    return if $self->is_dead;
 
+    # Consumption to be based on # of generators
+    my @report;
+    for my $product ('ore', 'energy') {
+        my @consumption = ();
+
+        for my $commodity (@{ $self->{generators}->{$product} }) {
+            $consumption[0] = $commodity->generator_name;
+            $consumption[2] = $commodity->maint_cost_type;
+
+            #<<<
             # Do I have enough $product to feed this generator?
-            if ($self->{ $cost_struct->{product} } < $cost_struct->{cost}) {
+            if ($self->{ $commodity->maint_cost_type } < $commodity->maint_cost_amount) {
                 $self->{starvation}++;
             } else {
-                $self->{ $cost_struct->{product} } -= $cost_struct->{cost};
+                $self->{starvation}-- if $self->{starvation} > 0;
             }
+
+            my $cost = $commodity->maint_cost_amount;
+
+            # Fleeced the actor of what you can
+            if ($cost > $self->{ $commodity->maint_cost_type }) {
+                $cost = $self->{ $commodity->maint_cost_type };
+            }
+
+            $self->{ $commodity->maint_cost_type } -= $cost;
+            $consumption[1] += $cost;
+            
+            #>>>
+        }
+
+        if ($consumption[1]) {
+            my $amt = scalar @{ $self->{generators}->{$product} };
+            push @report,
+              sprintf(
+                "%d %s%s consumed %d units of %s",
+                $amt, $consumption[0], ($amt > 1 ? "s" : ""),
+                $consumption[1], $consumption[2]
+              );
         }
     }
+
+    $self->msg(@report);
 } # end sub consume
+
+
+sub tax {
+    my ($self) = @_;
+
+    # Should be a penalty for not paying taxes
+    my @report;
+    for my $product ('ore', 'energy') {
+        my $total_cost = 0;
+        for my $commodity (@{ $self->{generators}->{$product} }) {
+            my $cost =
+              $commodity->tax > $self->{caps} ? $self->{caps} : $commodity->tax;
+            $self->{caps} -= $cost;
+            $total_cost += $cost;
+        }
+
+        push @report,
+          sprintf("paid %d caps in taxes for %s production",
+            $total_cost, $product);
+    }
+
+    $self->msg(@report);
+} # end sub tax
 
 
 sub status {
@@ -345,14 +472,36 @@ sub status {
 
     $self->msg(
         sprintf(
-            "ore[%2d]: %3d; energy[%2d]: %3d; caps: %10.2f; total: %10.2f",
-            $self->{generators}->{ore},    $self->{ore},
-            $self->{generators}->{energy}, $self->{energy},
-            $self->{caps},                 $self->total_assets_in_caps
+            "ORE mines: %2d; reserves %2d; maint: %d of %s; ENERGY farms: %2d; reserves: %2d; maint: %d of %s; CAPS: %5.2f; TOTAL: %6.2f",
+            scalar @{ $self->{generators}->{ore} },
+            $self->{ore},
+            $self->maintenance_cost("ore"),
+            scalar @{ $self->{generators}->{energy} },
+            $self->{energy},
+            $self->maintenance_cost("energy"),
+            $self->{caps},
+            $self->total_assets_in_caps
         )
     );
     return;
 } # end sub status
+
+sub maintenance_cost {
+    my ($self, $product) = @_;
+
+    my $commodity;
+    if ($product eq 'ore') {
+        $commodity = Ore->new;
+    } elsif ($product eq 'energy') {
+        $commodity = Energy->new;
+    } else {
+        die "Unknown product '$product'";
+    }
+
+    my $producers = @{ $self->{generators}->{$product} };
+    return ($producers * $commodity->maint_cost_amount,
+        $commodity->maint_cost_type);
+} # end sub maintenance_cost
 
 
 sub total_assets_in_caps {
@@ -371,10 +520,11 @@ sub total_assets_in_caps {
 # Loss of product due to usage, spoilage or theft
 sub shrinkage {
     my ($self) = @_;
+    return if $self->is_dead;
 
     my @report;
     for my $product ('ore', 'energy') {
-        my $shrinkage = int($self->{$product} * rand(1));
+        my $shrinkage = int($self->{$product} * rand(0.25));
         next if $shrinkage < 1;
 
         $self->{$product} -= $shrinkage;
@@ -386,21 +536,22 @@ sub shrinkage {
     }
 } # end sub shrinkage
 
+
 sub msg {
     my ($self, @msg) = @_;
 
     return unless @msg;
 
     my $state = "";
+
     if ($self->is_dead) {
         $state = color("bold red") . "{DEAD}" . color("reset");
     } elsif ($self->{starvation}) {
-        $state = color("bold white") . "{STARVING}" . color("reset");
+        $state =
+            color("bold white")
+          . "{STARVING-$self->{starvation}}"
+          . color("reset");
     }
-
-    # Add padding
-    my $padding = 25 - length($state);
-    $state = (' ' x $padding) . $state;
 
     printf("%s Actor %d] %s\n", $state, $self->{id}, join("; ", @msg));
 } # end sub msg
@@ -424,41 +575,50 @@ sub Main {
         $world->{week} = $week++;
         $world->status;
 
+        print "***Start of Week***\n";
         for my $actor (sort_wealthy(@actors)) {
             $actor->status;
         }
-        print "\n";
-
-        last if all { $_->is_dead } @actors;
+        print "\n***Activity***\n";
 
         for my $actor (@actors) {
             $actor->build;
         }
 
+        print "---\n";
         for my $actor (@actors) {
             $actor->produce;
             $actor->sell;
         }
 
+        print "---\n";
         for my $actor (@actors) {
             $actor->buy;
         }
 
+        print "---\n";
         for my $actor (@actors) {
             $actor->consume;
             $actor->shrinkage;
+            $actor->tax;
         }
 
         $world->shrinkage;
 
+        print "\n***End of Week***\n";
+        for my $actor (sort_wealthy(@actors)) {
+            $actor->status;
+        }
+
+        last if all { $_->is_dead } @actors;
+
         # sleep(1);
-        print "\nContinue? ";
-        my $ans = <>;
-        last if $ans =~ /q/i;
+        # last unless abort();
+
     }
 
     (my $winner) = sort_wealthy(@actors);
-    printf "GAME OVER - Winner: Actor %d\n", $winner->{id};
+    printf "GAME OVER - Winner: Actor %d in week %d\n", $winner->{id}, $week;
 
 } # end sub Main
 
@@ -471,5 +631,12 @@ sub sort_wealthy {
         map  { [ $_->total_assets_in_caps => $_ ] } @actors
     );
 } # end sub sort_wealthy
+
+sub abort {
+    print "\nContinue? ";
+    my $ans = <>;
+    return if $ans =~ /q/i;
+    return 1;
+} # end sub abort
 
 1;
