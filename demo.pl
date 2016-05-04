@@ -144,7 +144,12 @@ sub new {
     $self{energy}     = 0;
     $self{ore}        = 0;
     $self{starvation} = 0;
-    $self{generators} = { ore => 0, energy => 0 }, bless \%self, $class;
+    $self{generators} = { ore => 0, energy => 0 };
+    $self{consumption} = { ore => { product => "energy", cost => 10 },
+                           energy => { product => "ore", cost => 5 },
+                         };
+
+    bless \%self, $class;
 
     return \%self;
 } # end sub new
@@ -200,8 +205,8 @@ sub buy {
     for my $product ('ore', 'energy') {
         next if $self->{world}->has_shortage($product); # can't buy
 
-        # Do I need this?
-        if ($self->{$product} > 10) {
+        # Am I starving?  Do I need this?
+        if ($self->{starvation} < 4) {
             next;
         }
 
@@ -249,7 +254,13 @@ sub build {
     my @report;
     my @products = shuffle('ore', 'energy');
 
+    # TODO: make smarter decisions about what and when to buy
     for my $product (@products) {
+
+        # If starving, do not take on more liabilities
+        if ($self->{starvation} > 4) {
+            next;
+        }
         if ($self->build_generator($product)) {
             push @report,
               sprintf("built another %s (%d total)",
@@ -279,13 +290,14 @@ sub build_generator {
     $self->{generators}->{$product} += 1;
 } # end sub build_generator
 
+
 sub produce {
     my ($self) = @_;
     return if $self->is_dead;
 
     my %capacities = (
-        "ore"    => 5,
-        "energy" => 30
+        "ore"    => 50,
+        "energy" => 50
     );
 
     my @report;
@@ -308,18 +320,25 @@ sub produce {
     $self->msg(@report);
 } # end sub produce
 
+
 sub consume {
     my ($self) = @_;
 
     # Consumption to be based on # of generators
     for my $product ('ore', 'energy') {
-        if ($self->{$product} < 10) {
-            $self->{starvation}++;
-        } else {
-            $self->{$product} -= 10;
+        for (my $i = 0; $i < $self->{generators}->{$product}; $i++) {
+            my $cost_struct = $self->{consumption}->{$product};
+
+            # Do I have enough $product to feed this generator?
+            if ($self->{ $cost_struct->{product} } < $cost_struct->{cost}) {
+                $self->{starvation}++;
+            } else {
+                $self->{ $cost_struct->{product} } -= $cost_struct->{cost};
+            }
         }
     }
 } # end sub consume
+
 
 sub status {
     my ($self) = @_;
@@ -334,6 +353,7 @@ sub status {
     );
     return;
 } # end sub status
+
 
 sub total_assets_in_caps {
     my ($self) = @_;
@@ -401,7 +421,7 @@ sub Main {
 
     my $week = 0;
     while (1) {
-        $world->{week} = $week;
+        $world->{week} = $week++;
         $world->status;
 
         for my $actor (sort_wealthy(@actors)) {
