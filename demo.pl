@@ -119,10 +119,14 @@ sub status {
 
 #----------------------------------
 package Commodity;
+our $ID = 0;
 
 sub new {
     my ($class) = shift;
+    my $id = 0;
+
     my %args = (
+        id                => 0,
         product           => undef, # ore|energy
         generator_name    => undef,
         harvest           => 0,
@@ -130,11 +134,13 @@ sub new {
         maint_cost_amount => 0,
         maint_cost_type   => 0,     # ore|energy|caps
         tax               => 0,
+        hit_points        => 0,
         @_
     );
 
     my %self = (_attr => \%args);
     my $self = bless(\%self, (ref $class || $class));
+
     $self->_init_accessors();
 
     return $self;
@@ -160,9 +166,19 @@ sub _init_accessors {
 } # end sub _init_accessors
 
 
+sub next_global_id {
+    my ($self) = @_;
+    my $class = ref $self;
+    eval "\$${class}::ID++";
+    return eval "\$${class}::ID";
+} # end sub next_global_id
+
+
 #----------------------------------
 package Ore;
 our @ISA = ('Commodity');
+our $ID  = 0;
+
 sub new {
     my ($class) = shift;
     my %args = (
@@ -173,15 +189,22 @@ sub new {
         maint_cost_amount => 5,
         maint_cost_type   => "energy",
         tax               => 8,
+        hit_points        => 4,
         @_
     );
-    return $class->SUPER::new(%args);
+
+    my $self = $class->SUPER::new(%args);
+    $self->id( $self->next_global_id );
+
+    return $self;
 } # end sub new
 
 
 #----------------------------------
 package Energy;
 our @ISA = ('Commodity');
+our $ID  = 0;
+
 sub new {
     my ($class) = shift;
     my %args = (
@@ -192,9 +215,14 @@ sub new {
         maint_cost_amount => 10,
         maint_cost_type   => "ore",
         tax               => 15,
+        hit_points        => 12,
         @_
     );
-    return $class->SUPER::new(%args);
+
+    my $self = $class->SUPER::new(%args);
+    $self->id( $self->next_global_id );
+
+    return $self;
 } # end sub new
 
 
@@ -255,8 +283,10 @@ sub sell {
         $self->{$product} -= $want;
 
         push @report,
-          sprintf("sells $want units of $product \@ %0.2f caps/unit",
-            $unit_price);
+          sprintf("sells %d unit%s of $product \@ %0.2f caps/unit",
+                  $want,
+                  ($want == 1 ? "" : "s"),
+                  $unit_price);
     }
 
     $self->msg(@report);
@@ -332,8 +362,9 @@ sub build {
         if (my $commodity = $self->build_generator($product)) {
             push @report,
               sprintf(
-                "built another %s (%d total)",
+                "%s #%d built (%d total)!",
                 $commodity->generator_name,
+                $commodity->id,
                 scalar @{ $self->{generators}->{$product} }
               );
         }
@@ -380,10 +411,11 @@ sub produce {
         # For each kind of generator, see what is produced
         my $harvest = 0;
 
-        for my $commodity (@{ $self->{generators}->{$product} }) {
+        my @commodities = @{ $self->{generators}->{$product} };
+        for my $commodity (@commodities) {
             $harvest = int(rand() * $commodity->harvest);
+            $self->depreciate($commodity);
             next unless $harvest;
-
             $self->{$product} += $harvest;
         }
 
@@ -392,6 +424,35 @@ sub produce {
 
     $self->msg(@report);
 } # end sub produce
+
+
+sub depreciate {
+    my ($self, $commodity) = @_;
+    return unless $commodity;
+
+    my @report;
+    $commodity->hit_points($commodity->hit_points - 1);
+
+    if ($commodity->hit_points == 0) {
+        push @report,
+          sprintf(
+            "%s #%d has worn out!",
+            $commodity->generator_name,
+            $commodity->id
+          );
+
+        my @to_save;
+        for my $c (@{ $self->{generators}->{ $commodity->product } }) {
+            if ("$c" ne "$commodity") {
+                push @to_save, $c;
+            }
+        }
+
+        $self->{generators}->{ $commodity->product } = \@to_save;
+    }
+
+    $self->msg(@report);
+} # end sub depreciate
 
 
 sub consume {
