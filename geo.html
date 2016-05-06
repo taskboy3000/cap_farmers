@@ -1,0 +1,123 @@
+<!DOCTYPE html5>
+<html>
+  <head>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+    <script   src="https://code.jquery.com/jquery-2.2.3.min.js"
+              integrity="sha256-a23g1Nt4dtEYOj7bR+vTu7+T8VP13humZFBJNIYoEJo="
+              crossorigin="anonymous"></script>
+    <script type="text/javascript" src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>
+
+<script>
+map_api_key  = 'AIzaSyCypbSRutxPjoKW5nc_dBL0utfnDfadh-M';
+</script>
+
+
+<script>
+var map;
+
+function initMap() {
+   if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(success, error);
+   } else {
+      error('not supported');
+   }
+}
+
+
+function success(pos) {
+
+   var msg = pos.coords.latitude 
+             + ", "
+             + pos.coords.longitude;
+   $("#location span").html(msg);
+   $("#location").append("<p>Accuracy: "
+                + pos.coords.accuracy 
+                + " meters</p>");
+   $("#location").show();
+
+   var my_point = {lat: pos.coords.latitude, 
+                   lng: pos.coords.longitude},
+
+   map = new google.maps.Map($("#map").get(0),
+            {
+               center: my_point,
+               zoom: 16
+            });
+
+   marker = new google.maps.Marker({position: my_point, map: map, title: "You"});
+   var y = pos.coords.latitude;
+   var x = pos.coords.longitude;
+   var r = 0.002;
+
+   var box_paths = [
+     {lat: y + r, lng: x - r}, 
+     {lat: y + r, lng: x + r}, 
+     {lat: y, lng: x + r}, 
+     {lat: y - r, lng: x + r}, 
+     {lat: y - r, lng: x - r},
+     {lat: y, lng: x - r}, 
+
+   ];
+
+   var box = new google.maps.Polygon({
+     paths: box_paths,
+     strokeColor: '#ff3333',
+     strokeOpacity: 0.8,
+     strokeWeight: 2,
+     fillColor: '#ee9999',
+     fillOpacity: 0.25
+   });
+   box.setMap(map);
+
+   var weather_data = { lat: y,
+                        lon: x,
+                        appid: '8162bfea34750ebdae17fb9ba8861f83',
+                        units: "imperial",
+                      };
+                       
+   $.ajax({ url: '//api.openweathermap.org/data/2.5/weather',
+            data: weather_data,
+            method: "GET",
+            dataType: "JSON",
+            success: function(d) { 
+                        var report = "City: "
+                                     + d.name 
+ + "; "
++ d.weather[0].description
++ "; "
++ "Temp: "
++ d.main.temp
++ " F"
+;
+                        $("#location").append("<p>" + report + "</p>");
+                     }
+           });
+}
+
+function error(msg) {
+  alert(msg);
+}
+
+
+
+</script>
+<script type="text/javascript" src="//maps.google.com/maps/api/js?key=AIzaSyCypbSRutxPjoKW5nc_dBL0utfnDfadh-M&mapsLoaded&callback=initMap" async defer ></script>
+
+  </head>
+  <body>
+    <div class="jumbotron">
+      <div class="container">
+        <h1>Geolocation Test <small>There is no where to hide</small></h1>
+        <div id="location" style="display:none"><p>Your location: <span></span></p></div>
+        </div>
+    </div>
+    <div class="panel panel-default">
+        <div class="panel-heading">
+          <h3>Map</h3>
+        </div>
+        <div class="panel-body">
+          <div id="map" class="jumbotron" style="min-height:600px"></div>
+        </div>
+    </div>
+  </body>
+</html>
